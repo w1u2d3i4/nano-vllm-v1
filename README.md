@@ -1,7 +1,3 @@
-<p align="center">
-<img width="300" src="assets/logo.png">
-</p>
-
 # Nano-vLLM-v1
 
 基于 [Nano-vLLM](https://github.com/GeeeekExplorer/nano-vllm) 的改进版本，在保持轻量级（~1,500 行 Python，原版 ~1,360 行基础上仅增加 ~100 行）的前提下，引入多项来自 vLLM v1 和 SGLang 的核心优化。
