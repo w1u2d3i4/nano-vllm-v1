@@ -4,7 +4,7 @@
 
 # Nano-vLLM-v1
 
-基于 [Nano-vLLM](https://github.com/GeeeekExplorer/nano-vllm) 的改进版本，在保持轻量级（~1,600 行 Python）的前提下，引入多项来自 vLLM v1 和 SGLang 的核心优化。
+基于 [Nano-vLLM](https://github.com/GeeeekExplorer/nano-vllm) 的改进版本，在保持轻量级（~1,500 行 Python，原版 ~1,360 行基础上仅增加 ~100 行）的前提下，引入多项来自 vLLM v1 和 SGLang 的核心优化。
 
 ## 改进总览
 
@@ -19,36 +19,29 @@
 替换原版 prefill/decode 二阶段分离调度，改为统一的 token-aware 调度逻辑：
 - 不再区分 prefill 和 decode 阶段，统一在同一个调度循环中处理
 - 基于 `max_num_batched_tokens` 进行 token 级别的资源控制
-- 为后续 Pipeline 并行提供更好的架构基础
+- Attention 层统一使用 `flash_attn_varlen_func` 单一路径，兼容 flash_attn 2.8.3
 
 #### 3. BlockManager 增强
 - 新增 `get_token_layout()` 方法，精确计算 token 在 block 内的布局
 - 区分 `num_new_computed_tokens_in_used`（已有 block 中的新 token）和 `in_free`（需要新 block 的 token）
 - 实现更精确的内存预测与按需分配
 
+#### 4. Decode 快速路径（Zero-Overhead Scheduler）
+纯 decode 阶段且无新请求时，跳过完整调度逻辑（token_budget 计算、waiting 队列遍历、preemption 检查），直接为所有 running 序列分配 1 token 并返回：
+- 调度开销从 O(n_running + n_waiting) 降至 O(n_running) 的轻量检查
+- 实测吞吐量提升 **+27.8%**（11,961 → 15,294 tok/s）
+- 技术来源：SGLang v0.4 Zero-Overhead Batch Scheduler
+
 ### 规划中
 
-#### 4. 快速路径优化（Zero-Overhead Scheduler）
-Decode 阶段当无新请求到达时，跳过完整调度逻辑，直接复用上一轮的 running 序列集合：
-- 预期调度开销从 5% 降至 1%
-- 预期吞吐量提升 5-8%
-- 技术来源：SGLang v0.4
-
-#### 5. Pipeline 并行执行
-通过后台线程实现调度与推理的重叠执行，消除 CPU 调度阶段对 GPU 的阻塞：
-- 后台线程预先调度下一个 batch，GPU 推理时 CPU 同步工作
-- 预期 GPU 利用率从 70% 提升至 85%
-- 预期吞吐量提升 15-20%
-- 技术来源：vLLM v1 Pipeline 架构
-
-#### 6. BlockManager LRU 淘汰策略
+#### 5. BlockManager LRU 淘汰策略
 为 Prefix Cache 引入 LRU 淘汰机制，提升缓存命中率：
 - 当 KV Cache 空间不足时，优先淘汰最久未使用的 cached block
 - 更激进的 prefix cache 复用策略
 
 ### TBD
 
-#### 7. Learning to Rank 调度
+#### 6. Learning to Rank 调度
 基于 Learning to Rank 的智能请求调度策略，根据序列特征（长度、预估生成长度、缓存命中率等）学习最优调度顺序，替代传统的 FCFS 或简单优先级策略。
 
 ## Installation
@@ -83,10 +76,11 @@ outputs[0]["text"]
 - Chunked Prefill 支持（通过 `chunked_prefill=True` 启用）
 - BlockManager 增强（`get_token_layout`、按 token 数分配）
 - Attention 统一 varlen 路径 + flash_attn 2.8.3 CUDA Graph 兼容适配
+- Decode 快速路径（纯 decode 无新请求时跳过完整调度逻辑，效率提升最高）
 
 **性能结果：**
 
 | Inference Engine | Output Tokens | Time (s) | Throughput (tokens/s) |
 |----------------|-------------|----------|-----------------------|
 | Nano-vLLM（原版） | 133,966   | 12.03    | 11,138.68             |
-| Nano-vLLM-v1   | 133,966     | 11.20    | 11,961.52 (**+7.4%**) |
+| Nano-vLLM-v1   | 133,966     | 8.76     | 15,294.23 (**+37.3%**) |

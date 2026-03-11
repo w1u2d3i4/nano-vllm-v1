@@ -25,6 +25,13 @@ class Scheduler:
         self.waiting.append(seq)
 
     def schedule(self) -> tuple[list[Sequence], bool]:
+        if not self.waiting and self.running:
+            if all(self.block_manager.can_append(seq, 1) for seq in self.running):
+                for seq in self.running:
+                    seq.num_new_tokens = 1
+                    self.block_manager.may_append(seq)
+                return list(self.running)
+
         scheduled_running_seqs = []
         scheduled_new_reqs = []
         had_preemption = False
