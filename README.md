@@ -70,8 +70,23 @@ outputs[0]["text"]
 
 ## Benchmark
 
+**测试环境：**
+- Hardware: NVIDIA H100 PCIe (80GB)
+- Model: Qwen3-0.6B
+- Total Requests: 256 sequences
+- Input Length: 随机采样 100–1024 tokens
+- Output Length: 随机采样 100–1024 tokens
+- `enforce_eager=False`, `max_model_len=4096`
+
+**当前版本改动（相对原版 Nano-vLLM）：**
+- 统一调度器（不再区分 prefill/decode 阶段）
+- Chunked Prefill 支持（通过 `chunked_prefill=True` 启用）
+- BlockManager 增强（`get_token_layout`、按 token 数分配）
+- Attention 统一 varlen 路径 + flash_attn 2.8.3 CUDA Graph 兼容适配
+
+**性能结果：**
+
 | Inference Engine | Output Tokens | Time (s) | Throughput (tokens/s) |
 |----------------|-------------|----------|-----------------------|
-| vLLM           | 133,966     | 98.37    | 1361.84               |
-| Nano-vLLM      | 133,966     | 93.41    | 1434.13               |
-| Nano-vLLM-v1 (+ Pipeline) | -  | -       | ~1,720 (预期)         |
+| Nano-vLLM（原版） | 133,966   | 12.03    | 11,138.68             |
+| Nano-vLLM-v1   | 133,966     | 11.20    | 11,961.52 (**+7.4%**) |
