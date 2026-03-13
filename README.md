@@ -135,7 +135,7 @@ outputs[0]["text"]
 python bench_real.py --num_seqs 5000 --qps 50
 
 # LTR 在线学习
-python bench_ltr.py --num_seqs 5000 --qps 50
+python bench_ltr.py --num_seqs 50000 --qps 50
 
 # LTR 冻结模型（最终优化目标）
 python bench_ltr_freeze.py --num_seqs 5000 --qps 50
