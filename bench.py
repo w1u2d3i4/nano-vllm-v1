@@ -1,6 +1,7 @@
+import json
 import os
 import time
-from random import randint, seed
+from random import seed, sample
 from nanovllm import LLM, SamplingParams
 # from vllm import LLM, SamplingParams
 
@@ -8,16 +9,23 @@ from nanovllm import LLM, SamplingParams
 def main():
     seed(0)
     num_seqs = 256
-    max_input_len = 1024
     max_ouput_len = 1024
+
+    prompts_path = "prompts.jsonl"
+    all_prompts = []
+    with open(prompts_path, "r", encoding="utf-8") as f:
+        for line in f:
+            p = json.loads(line)
+            if p["prompt_length"] < 4096 - 1:
+                all_prompts.append(p)
+    prompt_token_ids = [p["token_ids"] for p in sample(all_prompts, num_seqs)]
+
+    sampling_params = [SamplingParams(temperature=0.6, ignore_eos=False, max_tokens=max_ouput_len) for _ in range(num_seqs)]
+    # uncomment the following line for vllm
+    # prompt_token_ids = [dict(prompt_token_ids=p) for p in prompt_token_ids]
 
     path = os.path.expanduser("~/huggingface/Qwen3-0.6B/")
     llm = LLM(path, enforce_eager=False, max_model_len=4096)
-
-    prompt_token_ids = [[randint(0, 10000) for _ in range(randint(100, max_input_len))] for _ in range(num_seqs)]
-    sampling_params = [SamplingParams(temperature=0.6, ignore_eos=True, max_tokens=randint(100, max_ouput_len)) for _ in range(num_seqs)]
-    # uncomment the following line for vllm
-    # prompt_token_ids = [dict(prompt_token_ids=p) for p in prompt_token_ids]
 
     llm.generate(["Benchmark: "], SamplingParams())
     t = time.time()

@@ -17,6 +17,8 @@ class Config:
     kvcache_block_size: int = 256
     num_kvcache_blocks: int = -1
     chunked_prefill: bool = False
+    enable_ltr: bool = False
+    ltr_data_path: str = ""
 
     def __post_init__(self):
         assert os.path.isdir(self.model)

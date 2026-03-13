@@ -1,3 +1,4 @@
+import time
 from copy import copy
 from enum import Enum, auto
 from itertools import count
@@ -28,6 +29,7 @@ class Sequence:
         self.temperature = sampling_params.temperature
         self.max_tokens = sampling_params.max_tokens
         self.ignore_eos = sampling_params.ignore_eos
+        self.arrival_time = time.time()
 
     def __len__(self):
         return self.num_tokens

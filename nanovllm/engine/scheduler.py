@@ -13,6 +13,7 @@ class Scheduler:
         self.max_num_seqs = config.max_num_seqs
         self.max_num_batched_tokens = config.max_num_batched_tokens
         self.eos = config.eos
+        self.block_size = config.kvcache_block_size
         self.block_manager = BlockManager(config.num_kvcache_blocks, config.kvcache_block_size)
         self.waiting: deque[Sequence] = deque()
         self.running: deque[Sequence] = deque()
@@ -26,7 +27,14 @@ class Scheduler:
 
     def schedule(self) -> tuple[list[Sequence], bool]:
         if not self.waiting and self.running:
-            if all(self.block_manager.can_append(seq, 1) for seq in self.running):
+            total_new_blocks = 0
+            for seq in self.running:
+                cap = self.block_size - (seq.num_cached_tokens % self.block_size)
+                if cap == self.block_size:
+                    cap = 0
+                if 1 > cap:
+                    total_new_blocks += 1
+            if total_new_blocks <= len(self.block_manager.free_block_ids):
                 for seq in self.running:
                     seq.num_new_tokens = 1
                     self.block_manager.may_append(seq)

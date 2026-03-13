@@ -30,10 +30,18 @@ class LLMEngine:
         self.model_runner = ModelRunner(config, 0, self.events)
         self.tokenizer = AutoTokenizer.from_pretrained(config.model, use_fast=True)
         config.eos = self.tokenizer.eos_token_id
-        self.scheduler = Scheduler(config)
+        if config.enable_ltr:
+            from nanovllm.engine.ltr_scheduler import LTRScheduler
+            self.scheduler = LTRScheduler(config)
+        else:
+            self.scheduler = Scheduler(config)
         atexit.register(self.exit)
 
     def exit(self):
+        if not hasattr(self, "model_runner"):
+            return
+        if hasattr(self.scheduler, "save_state"):
+            self.scheduler.save_state()
         self.model_runner.call("exit")
         del self.model_runner
         for p in self.ps:
