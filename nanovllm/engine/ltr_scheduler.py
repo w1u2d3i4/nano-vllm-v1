@@ -37,6 +37,7 @@ class LTRScheduler(Scheduler):
         self.collector = DataCollector(maxlen=50000)
         self.model: SGDRegressor | None = None
         self.phase = self.PHASE_FCFS
+        self.frozen = False  # Set True to disable all online learning overhead
         self.last_train_size = 0
         self.ltr_data_path = config.ltr_data_path
         self.update_log: list[dict] = []
@@ -78,7 +79,8 @@ class LTRScheduler(Scheduler):
     # ── scheduling ────────────────────────────────────────────
 
     def schedule(self) -> list[Sequence]:
-        self._update_phase()
+        if not self.frozen:
+            self._update_phase()
 
         if self._need_reorder and self.phase > self.PHASE_FCFS and len(self.waiting) > 1:
             self._reorder_waiting()
@@ -88,6 +90,10 @@ class LTRScheduler(Scheduler):
         return super().schedule()
 
     def postprocess(self, seqs, token_ids, seq_need_compute_logits):
+        if self.frozen:
+            super().postprocess(seqs, token_ids, seq_need_compute_logits)
+            return
+
         finished_before = {s.seq_id for s in seqs if s.is_finished}
         super().postprocess(seqs, token_ids, seq_need_compute_logits)
 

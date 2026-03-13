@@ -1,0 +1,4 @@
+# Files tagged as excluded from push (one per line)
+# Managed by Claude Code tagging system
+CLAUDE.md
+memory/conversation_summary.md

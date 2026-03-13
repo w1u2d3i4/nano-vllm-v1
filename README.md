@@ -2,9 +2,74 @@
 
 基于 [Nano-vLLM](https://github.com/GeeeekExplorer/nano-vllm) 的改进版本，在保持轻量级（~1,500 行 Python，原版 ~1,360 行基础上仅增加 ~100 行）的前提下，引入多项来自 vLLM v1 和 SGLang 的核心优化。
 
+## 分支说明
+
+| 分支 | 用途 |
+|------|------|
+| `main` | 稳定版本，包含 Phase 1 核心架构升级（统一调度器 + Fast Path + Chunked Prefill） |
+| `ltr_test` | LTR 实验分支，在 main 基础上新增 Learning-to-Rank 调度器及相关 benchmark |
+
+### ltr_test 分支 vs main 分支
+
+| 特性 | main | ltr_test |
+|------|------|----------|
+| 统一调度器 + Fast Path | ✅ | ✅ |
+| Chunked Prefill | ✅ | ✅ |
+| LTR 三阶段调度器 | ❌ | ✅ |
+| 在线学习（partial_fit） | ❌ | ✅ |
+| Freeze 模式（纯预测排序） | ❌ | ✅ |
+| 真实 prompt benchmark | ❌ | ✅ |
+| qps 流量注入模式 | ❌ | ✅ |
+
+### ltr_test 新增文件
+
+```
+nanovllm/engine/ltr_scheduler.py   # LTR 三阶段调度器
+nanovllm/utils/data_collector.py   # 训练数据收集（环形 buffer）
+bench_real.py                      # FCFS baseline benchmark
+bench_ltr.py                       # LTR benchmark（在线学习）
+bench_ltr_freeze.py                # LTR benchmark（冻结模型，最终优化目标）
+scripts/preprocess_sharegpt.py     # 真实 prompt 预处理脚本
+scripts/push.sh                    # 一键 push 脚本
+```
+
+### ltr_test 修改文件
+
+```
+nanovllm/config.py      # +enable_ltr, +ltr_data_path 配置
+nanovllm/engine/llm_engine.py  # 按 config 选择调度器，exit 时持久化
+nanovllm/engine/sequence.py    # +arrival_time（防饥饿机制）
+```
+
+## 实验目的
+
+### ltr_test 分支核心目标
+
+**在 qps 在线流量模拟场景下，使 LTR（冻结模型）调度器的吞吐量超过 FCFS baseline。**
+
+LTR 调度器通过预测每个请求的 output length，实现 Shortest-Job-First（SJF）排序。理论上，SJF 能减少平均等待时间，提升 GPU 利用率。实验分为三个阶段：
+
+1. **bench_real.py**：FCFS baseline，作为对比基准
+2. **bench_ltr.py**：LTR 在线学习版本，验证模型训练效果
+3. **bench_ltr_freeze.py**：LTR 冻结模型，代表生产环境推理场景，是最终优化目标
+
+### LTR 调度器三阶段
+
+```
+FCFS (< 50 样本) → Heuristic (< 200 样本, 按 prompt_length 排序) → Model (>= 200 样本, SGDRegressor 预测 output_length 做 SJF)
+```
+
+### Freeze 模式优化
+
+冻结模型模式通过 `scheduler.frozen = True` 启用，去除所有在线学习开销：
+- 跳过 `_update_phase()` 检查
+- 跳过 `collector.collect()` 数据收集
+- 跳过 `_maybe_train()` 模型训练
+- 只保留 SJF 排序调度
+
 ## 改进总览
 
-### 已实现
+### Phase 1: 核心架构升级（main 分支）
 
 #### 1. Chunked Prefill（分块预填充）
 将长 prompt 分块处理，避免单条长序列阻塞整个 batch，显著提升在线推理场景下的响应性。
@@ -28,17 +93,9 @@
 - 实测吞吐量提升 **+27.8%**（11,961 → 15,294 tok/s）
 - 技术来源：SGLang v0.4 Zero-Overhead Batch Scheduler
 
-### 规划中
+### Phase 2: LTR 调度器（ltr_test 分支）
 
-#### 5. BlockManager LRU 淘汰策略
-为 Prefix Cache 引入 LRU 淘汰机制，提升缓存命中率：
-- 当 KV Cache 空间不足时，优先淘汰最久未使用的 cached block
-- 更激进的 prefix cache 复用策略
-
-### TBD
-
-#### 6. Learning to Rank 调度
-基于 Learning to Rank 的智能请求调度策略，根据序列特征（长度、预估生成长度、缓存命中率等）学习最优调度顺序，替代传统的 FCFS 或简单优先级策略。
+详见上方「实验目的」和「LTR 调度器三阶段」。
 
 ## Installation
 
@@ -59,24 +116,53 @@ outputs[0]["text"]
 
 ## Benchmark
 
-**测试环境：**
+### 参数说明
+
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `--num_seqs` | 请求总数 | 256 |
+| `--max_tokens` | 每个请求最大生成 token 数 | 1024 |
+| `--max_model_len` | 模型最大上下文长度 | 32768 |
+| `--qps` | 每秒注入请求数（0=一次性注入） | 0 |
+| `--prompts_path` | 真实 prompt 文件路径 | prompts.jsonl |
+| `--labels_path` | 训练数据文件路径 | training_data.jsonl |
+| `--collect` | （bench_real.py 专用）收集训练标签 | false |
+
+### 运行命令
+
+```bash
+# FCFS baseline（qps 在线模式）
+python bench_real.py --num_seqs 5000 --qps 50
+
+# LTR 在线学习
+python bench_ltr.py --num_seqs 5000 --qps 50
+
+# LTR 冻结模型（最终优化目标）
+python bench_ltr_freeze.py --num_seqs 5000 --qps 50
+
+# 收集训练标签
+python bench_real.py --num_seqs 5000 --qps 50 --collect
+```
+
+### 测试环境
+
 - Hardware: NVIDIA H100 PCIe (80GB)
 - Model: Qwen3-0.6B
-- Total Requests: 256 sequences
-- Input Length: 随机采样 100–1024 tokens
-- Output Length: 随机采样 100–1024 tokens
-- `enforce_eager=False`, `max_model_len=4096`
+- Python: 3.12
+- flash_attn: 2.8.3
+- scikit-learn: 1.8.0
 
-**当前版本改动（相对原版 Nano-vLLM）：**
-- 统一调度器（不再区分 prefill/decode 阶段）
-- Chunked Prefill 支持（通过 `chunked_prefill=True` 启用）
-- BlockManager 增强（`get_token_layout`、按 token 数分配）
-- Attention 统一 varlen 路径 + flash_attn 2.8.3 CUDA Graph 兼容适配
-- Decode 快速路径（纯 decode 无新请求时跳过完整调度逻辑，效率提升最高）
-
-**性能结果：**
+### Phase 1 性能结果（bench.py, 256 seq, max_model_len=4096）
 
 | Inference Engine | Output Tokens | Time (s) | Throughput (tokens/s) |
 |----------------|-------------|----------|-----------------------|
 | Nano-vLLM（原版） | 133,966   | 12.03    | 11,138.68             |
 | Nano-vLLM-v1   | 133,966     | 8.76     | 15,294.23 (**+37.3%**) |
+
+### Phase 2 性能结果（待更新）
+
+| Benchmark | 模式 | num_seqs | qps | Throughput |
+|-----------|------|----------|-----|------------|
+| bench_real.py | FCFS baseline | 5000 | 50 | 待测试 |
+| bench_ltr.py | LTR 在线学习 | 5000 | 50 | 待测试 |
+| bench_ltr_freeze.py | LTR 冻结模型 | 5000 | 50 | 待测试 |

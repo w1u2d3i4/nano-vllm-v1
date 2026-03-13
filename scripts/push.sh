@@ -15,6 +15,11 @@ COMMENT="$2"
 CURRENT_BRANCH=$(git branch --show-current)
 
 git add -A
+if [ -f .push_exclude ]; then
+    grep -v '^#' .push_exclude | grep -v '^$' | while read -r f; do
+        git reset HEAD -- "$f" 2>/dev/null || true
+    done
+fi
 git commit -m "$COMMENT"
 
 if [ "$CURRENT_BRANCH" != "$BRANCH" ]; then

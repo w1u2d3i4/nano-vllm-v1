@@ -73,12 +73,10 @@ def main():
               max_model_len=args.max_model_len, max_num_batched_tokens=mbt,
               enable_ltr=True, ltr_data_path=args.labels_path)
 
-    # Freeze the model: disable online learning
+    # Freeze the model: disable all online learning overhead
     scheduler = llm.scheduler
-    if hasattr(scheduler, 'UPDATE_INTERVAL'):
-        original_interval = scheduler.UPDATE_INTERVAL
-        scheduler.UPDATE_INTERVAL = float('inf')  # Never trigger partial_fit
-        print(f"[LTR-FREEZE] Model frozen (UPDATE_INTERVAL: {original_interval} → inf)")
+    scheduler.frozen = True
+    print(f"[LTR-FREEZE] Model frozen (phase={scheduler._phase_name}, no collect/train overhead)")
 
     llm.generate(["warmup"], SamplingParams(), use_tqdm=False)
 

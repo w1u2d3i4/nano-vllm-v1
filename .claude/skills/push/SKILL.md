@@ -16,7 +16,7 @@ Stage all changes, commit with the given message, and push to the specified bran
 
 ## Steps
 
-1. Run `git add -A` to stage all changes
+1. Run `git add -A` then unstage files listed in `.push_exclude`
 2. Run `git commit -m "$ARGUMENTS[1]"`
 3. If target branch differs from current:
    - If branch exists locally: checkout and merge
@@ -33,6 +33,11 @@ COMMENT="$ARGUMENTS[1]"
 CURRENT=$(git branch --show-current)
 
 git add -A
+if [ -f .push_exclude ]; then
+    grep -v '^#' .push_exclude | grep -v '^$' | while read -r f; do
+        git reset HEAD -- "$f" 2>/dev/null || true
+    done
+fi
 git commit -m "$COMMENT"
 
 if [ "$CURRENT" != "$BRANCH" ]; then
