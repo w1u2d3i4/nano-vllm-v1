@@ -1,4 +1,21 @@
 # Files tagged as excluded from push (one per line)
 # Managed by Claude Code tagging system
+
+# 项目内部文档
 CLAUDE.md
 memory/conversation_summary.md
+精简.md
+
+# 测试/实验文件（非核心 bench）
+bench.py
+bench_oracle.py
+example.py
+
+# 数据文件
+prompts.jsonl
+training_data.jsonl
+training_data.jsonl.model
+
+# 生成的图片
+ltr_throughput.png
+ltr_freeze_throughput.png

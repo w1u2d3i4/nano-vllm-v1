@@ -159,10 +159,16 @@ python bench_real.py --num_seqs 5000 --qps 50 --collect
 | Nano-vLLM（原版） | 133,966   | 12.03    | 11,138.68             |
 | Nano-vLLM-v1   | 133,966     | 8.76     | 15,294.23 (**+37.3%**) |
 
-### Phase 2 性能结果（待更新）
+### Phase 2 性能结果（5000 seq, qps=50, max_model_len=32768）
 
-| Benchmark | 模式 | num_seqs | qps | Throughput |
-|-----------|------|----------|-----|------------|
-| bench_real.py | FCFS baseline | 5000 | 50 | 待测试 |
-| bench_ltr.py | LTR 在线学习 | 5000 | 50 | 待测试 |
-| bench_ltr_freeze.py | LTR 冻结模型 | 5000 | 50 | 待测试 |
+| Benchmark | 模式 | Output Tokens | Time (s) | Throughput (tok/s) | vs FCFS |
+|-----------|------|-------------|----------|--------------------|---------|
+| bench_real.py | FCFS baseline | 5,516,652 | 300.75 | **18,342.89** | — |
+| bench_ltr.py | LTR 在线学习 | 5,516,652 | 309.07 | 17,849.44 | -2.7% |
+| bench_ltr_freeze.py | LTR 冻结模型 | 5,516,652 | 300.95 | 18,330.86 | -0.07% |
+
+**分析：**
+- Freeze 优化有效：去除在线学习开销后，LTR Freeze 与 FCFS 基本持平
+- Oracle 测试（完美预测 output_length）证实：按 output_length 做 SJF 不能提升吞吐量
+- SJF 优化的是平均延迟而非吞吐量，在 continuous batching 场景下调度顺序对吞吐几乎无影响
+- 下一步方向：从 output_length 预测转向 prefill-cost-aware 调度（按 prompt_length 排序，减少 prefill 占比）
