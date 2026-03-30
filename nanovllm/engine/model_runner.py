@@ -126,6 +126,50 @@ class ModelRunner:
         return block_tables
 
     def prepare_model_input(self, seqs: list[Sequence]):
+        # Fast path: pure decode (all seqs have 1 new token and block_table)
+        # Avoids expensive list.extend() and list(range()) calls
+        n = len(seqs)
+        if n > 0 and all(seq.num_new_tokens == 1 and seq.block_table for seq in seqs):
+            return self._prepare_decode_fast(seqs)
+        return self._prepare_general(seqs)
+
+    def _prepare_decode_fast(self, seqs: list[Sequence]):
+        """Optimized input preparation for pure decode (1 token per seq)."""
+        n = len(seqs)
+        # Pre-allocate arrays
+        input_ids_arr = [0] * n
+        positions_arr = [0] * n
+        slot_mapping_arr = [0] * n
+        context_lens_arr = [0] * n
+        seq_need_arr = []
+
+        for i, seq in enumerate(seqs):
+            input_ids_arr[i] = seq.last_token
+            cached = seq.num_cached_tokens
+            positions_arr[i] = cached
+            context_lens_arr[i] = cached + 1
+            if len(seq) == cached + 1:
+                seq_need_arr.append(i)
+            # Slot mapping: single token's position in the block
+            block_idx = cached // self.block_size
+            slot = seq.block_table[block_idx] * self.block_size + cached % self.block_size
+            slot_mapping_arr[i] = slot
+
+        block_tables = self.prepare_block_tables(seqs)
+        input_ids = torch.tensor(input_ids_arr, dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
+        positions = torch.tensor(positions_arr, dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
+        cu_seqlens_q = torch.arange(n + 1, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
+        cu_seqlens_k = torch.tensor([0] + context_lens_arr, dtype=torch.int32, pin_memory=True)
+        cu_seqlens_k = cu_seqlens_k.cumsum(0).to(torch.int32).cuda(non_blocking=True)
+        slot_mapping = torch.tensor(slot_mapping_arr, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
+        context_lens = torch.tensor(context_lens_arr, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
+        seq_need_compute_logits = torch.tensor(seq_need_arr, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
+        set_context(cu_seqlens_q, cu_seqlens_k, 1, max(context_lens_arr),
+                    slot_mapping, context_lens, block_tables, seq_need_compute_logits)
+        return input_ids, positions
+
+    def _prepare_general(self, seqs: list[Sequence]):
+        """Original general-purpose input preparation."""
         input_ids = []
         positions = []
         cu_seqlens_q = [0]
@@ -220,6 +264,54 @@ class ModelRunner:
         seq_need_compute_logits = get_context().seq_need_compute_logits
         reset_context()
         return token_ids, seq_need_compute_logits
+
+    def run_with_probs(self, seqs: list[Sequence]):
+        """Same as run() but also returns per-seq target probs for speculative decoding."""
+        input_ids, positions = self.prepare_model_input(seqs)
+        temperatures = self.prepare_sample(seqs) if self.rank == 0 else None
+        logits = self.run_model(input_ids, positions)
+        if self.rank == 0:
+            logits_f = logits.float()
+            logits_f_scaled = logits_f / temperatures.unsqueeze(1)
+            probs = torch.softmax(logits_f_scaled, dim=-1)
+            token_ids = probs.div(torch.empty_like(probs).exponential_(1).clamp_min_(1e-10)).argmax(dim=-1)
+            token_ids = token_ids.tolist()
+        else:
+            token_ids = None
+            probs = None
+        seq_need_compute_logits = get_context().seq_need_compute_logits
+        reset_context()
+        return token_ids, seq_need_compute_logits, probs
+
+    @torch.inference_mode()
+    def run_draft(self, seqs: list[Sequence], num_draft_layers: int):
+        """Run early-exit draft forward. Returns (token_ids, probs) in eager mode."""
+        input_ids, positions = self.prepare_model_input(seqs)
+        # Draft always runs in eager mode (no CUDA graph)
+        hidden = self.model.model(input_ids, positions, num_layers=num_draft_layers)
+        logits = self.model.compute_logits(hidden)
+        temperatures = self.prepare_sample(seqs)
+        # Sample with probs for rejection sampling
+        logits_f = logits.float()
+        logits_f.div_(temperatures.unsqueeze(1))
+        probs = torch.softmax(logits_f, dim=-1)
+        # Clone probs BEFORE Gumbel sampling corrupts them in-place
+        probs_clean = probs.clone()
+        token_ids = probs.div_(torch.empty_like(probs).exponential_(1).clamp_min_(1e-10)).argmax(dim=-1)
+        reset_context()
+        return token_ids.tolist(), probs_clean
+
+    @torch.inference_mode()
+    def run_verify(self, seqs: list[Sequence]):
+        """Run full model verify on multiple new tokens per seq. Returns logits for ALL positions."""
+        input_ids, positions = self.prepare_model_input(seqs)
+        # Verify always runs in eager mode — bypass run_model/CUDA graphs
+        hidden = self.model(input_ids, positions)
+        # Bypass ParallelLMHead's last-token-only filtering: compute logits for ALL tokens
+        import torch.nn.functional as F
+        logits = F.linear(hidden, self.model.lm_head.weight)
+        reset_context()
+        return logits
 
     @torch.inference_mode()
     def capture_cudagraph(self):

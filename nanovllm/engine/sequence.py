@@ -74,6 +74,13 @@ class Sequence:
         self.last_token = token_id
         self.num_tokens += 1
 
+    def rollback(self, n: int):
+        """Remove last n tokens and update state."""
+        assert n <= self.num_completion_tokens
+        self.token_ids = self.token_ids[:-n]
+        self.num_tokens -= n
+        self.last_token = self.token_ids[-1]
+
     def __getstate__(self):
         return (self.num_tokens, self.num_prompt_tokens, self.num_cached_tokens,
                 self.num_new_tokens, self.block_table,

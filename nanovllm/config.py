@@ -19,6 +19,9 @@ class Config:
     chunked_prefill: bool = False
     enable_ltr: bool = False
     ltr_data_path: str = ""
+    enable_speculative: bool = False
+    num_draft_layers: int = 7
+    num_speculative_tokens: int = 3
 
     def __post_init__(self):
         assert os.path.isdir(self.model)

@@ -104,6 +104,9 @@ class Scheduler:
 
     def postprocess(self, seqs: list[Sequence], token_ids: list[int], seq_need_compute_logits) -> list[bool]:
         assert len(token_ids) == len(seq_need_compute_logits)
+        # Convert CUDA tensor to Python list to avoid per-element GPU→CPU transfers
+        if hasattr(seq_need_compute_logits, 'tolist'):
+            seq_need_compute_logits = seq_need_compute_logits.tolist()
         for seq_index, token_id in zip(seq_need_compute_logits, token_ids):
             seq = seqs[seq_index]
             seq.append_token(token_id)

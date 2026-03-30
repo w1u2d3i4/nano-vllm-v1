@@ -120,6 +120,16 @@ class BlockManager:
         seq.num_new_tokens = 0
         seq.block_table.clear()
 
+    def trim_blocks(self, seq: Sequence):
+        """Free trailing blocks that are no longer needed after rollback."""
+        needed_blocks = seq.num_blocks
+        while len(seq.block_table) > needed_blocks:
+            block_id = seq.block_table.pop()
+            block = self.blocks[block_id]
+            block.ref_count -= 1
+            if block.ref_count == 0:
+                self._deallocate_block(block_id)
+
     def can_append(self, seq: Sequence, num_new_tokens: int) -> bool:
         last_computed_block_capacity = self.block_size - (seq.num_cached_tokens % self.block_size)
         if last_computed_block_capacity == self.block_size:
