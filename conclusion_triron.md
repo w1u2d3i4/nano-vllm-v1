@@ -12,7 +12,7 @@
 4. [Phase 1：Triton Kernel 优化](#4-phase-1triton-kernel-优化)
 5. [Phase 2：Speculative Decoding](#5-phase-2speculative-decoding)
 6. [Goal 1：QPS 压力测试与 Max Goodput](#6-goal-1qps-压力测试与-max-goodput)
-7. [Goal 2：最大上下文长度](#7-goal-2最大上下文长度)
+7. [Goal 2：最大上下文长度与 KV Cache 容量](#7-goal-2最大上下文长度与-kv-cache-容量)
 8. [三目标最终结果汇总](#8-三目标最终结果汇总)
 9. [方法论反思：为什么 Kernel Profiling 会误导优化方向](#9-方法论反思为什么-kernel-profiling-会误导优化方向)
 10. [Phase 3：系统级 Profiling（Nsight Systems 方法论）](#10-phase-3系统级-profilingnsight-systems-方法论)
@@ -457,46 +457,71 @@ python bench_latency.py --sweep --num_seqs 1000 --report sweep_results.json
 
 ---
 
-## 7. Goal 2：最大上下文长度
+## 7. Goal 2：最大上下文长度与 KV Cache 容量
 
 ### 7.1 问题
 
-H100 80GB 单卡能处理的最长 token 输入是多少？
+H100 80GB 单卡上，模型的有效上下文窗口和 KV Cache 物理容量分别是多少？
 
-### 7.2 理论计算
+### 7.2 关键概念区分
+
+| 概念 | 定义 | 决定因素 |
+|------|------|---------|
+| **模型有效上下文窗口** | 模型能准确处理的最大输入长度 | `max_position_embeddings`（RoPE 训练范围） |
+| **KV Cache 物理容量** | GPU 显存能容纳的 KV token 总数 | 显存大小、模型参数量、KV 精度 |
+| **单序列最大上下文** | 单个请求能输入的最大 token 数 | min(模型窗口, KV 容量) |
+| **并发 KV 容量** | 多序列同时运行时可容纳的 token 总量 | KV 物理容量 |
+
+**Qwen3-0.6B 的配置**：
+```
+max_position_embeddings = 40,960 (40K)
+rope_theta = 1,000,000
+rope_scaling = None（无扩展）
+```
+
+代码中 `max_model_len = min(max_model_len, max_position_embeddings)` 会将实际上下文钳制到 40K。超过 40K 后 RoPE 位置编码未训练，输出质量严重退化。
+
+### 7.3 KV Cache 容量理论计算
 
 ```
-可用 KV Cache 内存：~76 GB
-KV bytes/token = 2 × 28 layers × 8 kv_heads × 128 head_dim × 2 bytes = 114,688 bytes ≈ 112 KB
-理论 max tokens = 76 GB / 112 KB ≈ 696,000 tokens
-Block 对齐开销（block_size=256）：实际约 600K-650K tokens
+模型权重（bf16）：≈ 1.2 GB
+CUDA + PyTorch overhead：≈ 2 GB
+可用于 KV Cache：≈ 76 GB
+
+KV bytes/token = 2(K+V) × 28 layers × 8 kv_heads × 128 head_dim × 2 bytes(bf16)
+               = 114,688 bytes ≈ 112 KB/token
+
+KV Cache 物理容量 = 76 GB / 112 KB ≈ 696,000 tokens
 ```
 
-### 7.3 实测结果
+### 7.4 实测结果
 
-| max_model_len | 结果 | 吞吐 | 备注 |
-|--------------|------|------|------|
+**说明**：以下测试传入的 `max_model_len` 参数决定了 KV Cache 分配空间大小。由于代码钳制，模型实际处理的单序列上下文不超过 40K。测试验证的是 **KV Cache 物理容量能否成功分配**，而非模型能否有效利用该长度上下文。
+
+| 传入 max_model_len | KV 分配 | 单序列解码吞吐 | 备注 |
+|-------------------|---------|--------------|------|
 | 32,768 (32K) | 成功 | — | baseline |
-| 65,536 (64K) | 成功 | 351.65 tok/s | |
-| 131,072 (128K) | 成功 | 355.16 tok/s | |
-| 262,144 (256K) | 成功 | 360.50 tok/s | |
-| **524,288 (512K)** | **成功** | **361.49 tok/s** | |
-| **655,360 (640K)** | **成功** | **338.67 tok/s** | 接近理论上限 |
+| 65,536 (64K) | 成功 | 351.65 tok/s | 实际 max_model_len 被钳制为 40K |
+| 131,072 (128K) | 成功 | 355.16 tok/s | 同上 |
+| 262,144 (256K) | 成功 | 360.50 tok/s | 同上 |
+| 524,288 (512K) | 成功 | 361.49 tok/s | 同上 |
+| **655,360 (640K)** | **成功** | **338.67 tok/s** | 接近物理上限 696K |
 
-### 7.4 分析
+### 7.5 正确解读
 
-- **实测最大上下文 ≥ 655,360 tokens（640K）**，接近理论上限 696K
-- 吞吐在 512K 之后开始下降（6.3%），可能因为 KV Cache 几乎满载
-- 单序列独占全部 KV Cache 时，没有并发能力的损失
-- 多序列场景下，每个序列可用的 max context = 655K / num_seqs
+- **单序列最大有效上下文 = 40,960 tokens（40K）**，由模型 RoPE 训练范围决定
+- **KV Cache 物理容量 ≈ 655K tokens**，接近理论上限 696K
+- 655K 容量的实际意义：可支持约 **16 个 40K 上下文的并发序列**（655K / 40K ≈ 16）
+- 吞吐在 512K KV 分配后下降 6.3%，因 KV Cache 管理开销增大
 
-### 7.5 未来优化方向
+### 7.6 扩展上下文的方法
 
-| 优化 | 预期收益 | 实现难度 |
-|------|---------|---------|
-| KV Cache INT8 量化 | 2× context (1.3M tokens) | 中 |
-| KV Cache FP8 | 2× context (Hopper 原生) | 低 |
-| Token Eviction (StreamingLLM) | 无限 context（有损） | 中 |
+| 方法 | 作用 | 说明 |
+|------|------|------|
+| **RoPE Scaling (YaRN/NTK)** | 扩展模型有效窗口到 128K+ | 需微调或推理时动态调整 rope_theta |
+| **KV Cache INT8/FP8 量化** | 2× KV 容量（~1.3M tokens） | 不改变模型窗口，增加并发能力 |
+| **Token Eviction (StreamingLLM)** | "无限"上下文（有损） | 保留头尾 token，驱逐中间 |
+| **长上下文微调** | 真正扩展训练窗口 | 需要长文本数据 + 训练资源 |
 
 ---
 
@@ -505,8 +530,10 @@ Block 对齐开销（block_size=256）：实际约 600K-650K tokens
 | 目标 | 指标 | Baseline | 最终值 | 变化 |
 |------|------|----------|--------|------|
 | **Goal 1: Max QPS** | Max Goodput | 10 req/s | **12 req/s** | +20% |
-| **Goal 2: Max Context** | Max input_length | 262K | **≥655K tokens** | +150% |
+| **Goal 2: Max Context** | 模型有效上下文 / KV Cache 容量 | 40K / — | **40K / 655K tokens** | 见下方说明 |
 | **Goal 3: Max Throughput** | Output TPS | 22,852 | **37,430 tok/s** | **+63.7%** |
+
+**Goal 2 说明**：Qwen3-0.6B 的 `max_position_embeddings = 40,960`（40K），RoPE 仅在此范围内训练过，超出后输出质量严重退化。655K 是 H100 80GB 上的 **KV Cache 物理容量**（可容纳的 token 总数），决定的是并发能力（如 40K × 16 seq），而非单序列上下文长度。要突破 40K 上下文限制需要 RoPE scaling（YaRN/NTK）或长上下文微调。
 
 ### 优化尝试 vs 结果
 

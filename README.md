@@ -10,7 +10,8 @@
 |------|---------------|-------------|------|
 | **最大吞吐量** (512 seqs, all-at-once) | 11,139 tok/s | **37,430 tok/s** | **+236%** |
 | **Max Goodput** (chatbot SLA) | — | **12 req/s** | — |
-| **最大上下文** (单序列) | — | **655K tokens** | — |
+| **模型有效上下文** | — | **40K tokens** | 受 RoPE `max_position_embeddings` 限制 |
+| **KV Cache 物理容量** | — | **655K tokens** | 支持 ~16 个 40K 并发序列 |
 
 ## 分支说明
 
