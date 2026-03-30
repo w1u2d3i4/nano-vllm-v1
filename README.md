@@ -153,6 +153,4 @@ python bench_speculative.py --num_seqs 512 --draft_layers 14 --spec_tokens 3
 
 本项目中，31 行系统级修复（postprocess `.tolist()` + decode fast path）带来 +63.7% 吞吐提升，而 680 行 Triton kernel + Speculative Decoding 代码带来 0% 有效提升。详见 [conclusion_triron.md](conclusion_triron.md)。
 
-## License
 
-MIT
