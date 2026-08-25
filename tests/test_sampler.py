@@ -30,3 +30,23 @@ def test_log_space_exponential_race_matches_probability_space() -> None:
     )
 
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
+
+def test_log_space_exponential_race_matches_randomized_inputs() -> None:
+    torch.manual_seed(7)
+    logits = torch.randn(64, 257, dtype=torch.float32)
+    temperatures = torch.rand(64, dtype=torch.float32).mul_(1.9).add_(0.1)
+    exponential = torch.empty_like(logits).exponential_(1)
+
+    scaled_logits = logits / temperatures.unsqueeze(1)
+    probability_space = torch.softmax(scaled_logits, dim=-1)
+    expected = probability_space.div(
+        exponential.clamp_min(1e-10)
+    ).argmax(dim=-1)
+    actual = _exponential_race(
+        logits.clone(),
+        temperatures,
+        exponential.clone(),
+    )
+
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
