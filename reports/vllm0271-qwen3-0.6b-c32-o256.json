@@ -1,0 +1,41 @@
+{
+  "config": {
+    "enforce_eager": false,
+    "gpu_memory_utilization": 0.9,
+    "input_len": 128,
+    "max_model_len": 4096,
+    "max_num_batched_tokens": 8192,
+    "max_num_seqs": 64,
+    "num_prompts": 32,
+    "output_len": 256,
+    "repeats": 5,
+    "seed": 0
+  },
+  "cuda": "12.9",
+  "duration_seconds": [
+    0.8572612907737494,
+    0.9649257436394691,
+    0.7895750161260366,
+    0.8272628448903561,
+    0.8534573400393128
+  ],
+  "engine": "vllm",
+  "engine_version": "0.27.1",
+  "git_revision": null,
+  "gpu": "NVIDIA H100 PCIe",
+  "gpu_memory_used_mib": 74114.4375,
+  "mean_output_tokens_per_second": 9584.425609996457,
+  "median_output_tokens_per_second": 9598.605127261137,
+  "model": "/opt/data/private/huggingface/Qwen3-0.6B",
+  "output_tokens_per_second": [
+    9556.012954470441,
+    8489.77245554848,
+    10375.201637196109,
+    9902.535875506113,
+    9598.605127261137
+  ],
+  "python": "3.12.12",
+  "schema_version": 1,
+  "stdev_output_tokens_per_second": 693.8650323483478,
+  "torch": "2.13.0+cu129"
+}
